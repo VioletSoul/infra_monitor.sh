@@ -1,10 +1,19 @@
 Script Description
 ------------------
-This is an advanced infrastructure monitoring script designed for macOS environments running the zsh shell. It performs periodic health checks on critical system resources and services, including CPU usage, memory consumption, disk space, network packet loss, and the status of key services (e.g., nginx, PostgreSQL, Redis).
-The script integrates with external systems by:
-
-	•	Sending alert notifications via Telegram when resource usage exceeds configurable thresholds or services become unavailable.
-	•	Pushing performance metrics to a Prometheus Pushgateway endpoint for centralized monitoring and visualization.
- 
-It features robust logging with timestamped entries, runs checks concurrently for efficiency, and gracefully handles termination signals. This tool is ideal for system administrators and DevOps engineers seeking automated, real-time monitoring of their macOS infrastructure.
+This script is designed for infrastructure monitoring on macOS systems. It periodically (every 5 seconds) collects key metrics:
+•	CPU usage
+•	Memory usage (accurately accounting for active, wired, and compressed memory)
+•	Disk usage
+•	Network packet loss
+•	Status of critical services (e.g., nginx, postgres, redis)
+The collected metrics are pushed to a Prometheus Pushgateway for aggregation and visualization.
+When configured thresholds (warning and critical) are exceeded, the script sends alerts via Telegram.
+Key Features
+•	Automatic configuration loading from a config file
+•	Timestamped logging of all output
+•	Alert notifications sent to Telegram
+•	Service health checks on specified ports
+•	Metrics publishing to Prometheus Pushgateway, enabling integration with Prometheus and other monitoring systems
+Usage
+Run the script; it operates in an infinite loop, updating and pushing metrics to the Prometheus Pushgateway every 5 seconds.
 ------------------
