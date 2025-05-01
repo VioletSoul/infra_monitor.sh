@@ -46,109 +46,167 @@ send_alert() {
   local level=$1
   local message=$2
   echo "Sending alert: [$level] $message"
-  curl -s -X POST \
-    -H 'Content-Type: application/json' \
-    -d "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"text\":\"[$level] $message\"}" \
-    "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" >/dev/null
+  if [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]]; then
+    curl -s -X POST \
+      -H 'Content-Type: application/json' \
+      -d "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"text\":\"[$level] $message\"}" \
+      "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" >/dev/null
+  fi
 }
 
-push_metric() {
-  local metric=$1
-  local value=$2
-  local labels=$3
-  [[ -n "$labels" ]] && labels=",$labels"
-  echo "Pushing metric: $metric $value $labels"
-  curl -s -X POST "$PROMETHEUS_PUSHGATEWAY/metrics/job/infra_monitor/instance/$INSTANCE_NAME$labels" \
-    --data-binary "$metric $value" >/dev/null
-}
+# --- Global variables for metrics ---
+cpu_usage=""
+mem_usage=""
+disk_usage=""
+network_loss=""
+typeset -A service_statuses
 
 # --- Checks ---
 check_cpu() {
   echo "Checking CPU usage..."
-  local cpu_idle cpu_usage
-  cpu_idle=$(iostat -c 2 | tail -n 1 | awk '{print $6}')
-  cpu_usage=$(awk "BEGIN {print 100 - $cpu_idle}")
+  local cpu_val
+  cpu_val=$(top -l 2 -n 0 | grep "CPU usage" | tail -1 | awk '{print $3 + $5}' | sed 's/%//g')
+  cpu_val=${cpu_val:-0}
+  cpu_usage=$cpu_val
 
-  push_metric "cpu_usage" "$cpu_usage" "type=percent"
-
-  if (( $(echo "$cpu_usage >= ${THRESHOLDS[CPU_CRIT]}" | bc -l) )); then
-    send_alert "CRITICAL" "CPU usage is at ${cpu_usage}%"
-    return 2
-  elif (( $(echo "$cpu_usage >= ${THRESHOLDS[CPU_WARN]}" | bc -l) )); then
-    send_alert "WARNING" "CPU usage is at ${cpu_usage}%"
-    return 1
+  if (( $(echo "$cpu_val >= ${THRESHOLDS[CPU_CRIT]}" | bc -l) )); then
+    send_alert "CRITICAL" "CPU usage is at ${cpu_val}%"
+  elif (( $(echo "$cpu_val >= ${THRESHOLDS[CPU_WARN]}" | bc -l) )); then
+    send_alert "WARNING" "CPU usage is at ${cpu_val}%"
   fi
 }
 
 check_memory() {
   echo "Checking memory usage..."
-  local pages_free pages_active pages_inactive pages_speculative pages_wired pages_used mem_total mem_usage
-  pages_free=$(vm_stat | awk '/Pages free/ {print $3}' | tr -d '.')
-  pages_active=$(vm_stat | awk '/Pages active/ {print $3}' | tr -d '.')
-  pages_inactive=$(vm_stat | awk '/Pages inactive/ {print $3}' | tr -d '.')
-  pages_speculative=$(vm_stat | awk '/Pages speculative/ {print $3}' | tr -d '.')
-  pages_wired=$(vm_stat | awk '/Pages wired down/ {print $4}' | tr -d '.')
-  pages_used=$((pages_active + pages_inactive + pages_speculative + pages_wired))
-  mem_total=$((pages_used + pages_free))
-  mem_usage=$(awk "BEGIN {printf \"%.2f\", ($pages_used / $mem_total) * 100}")
-  mem_usage=${mem_usage/,/.}  # Replace comma with dot if locale uses comma
 
-  push_metric "memory_usage" "$mem_usage" "type=percent"
+  local page_size pages_active pages_inactive pages_wired pages_free pages_compressed pages_used pages_total
+  local bytes_used bytes_total mem_val
 
-  if (( $(echo "$mem_usage >= ${THRESHOLDS[MEM_CRIT]}" | bc -l) )); then
-    send_alert "CRITICAL" "Memory usage is at ${mem_usage}%"
-    return 2
-  elif (( $(echo "$mem_usage >= ${THRESHOLDS[MEM_WARN]}" | bc -l) )); then
-    send_alert "WARNING" "Memory usage is at ${mem_usage}%"
-    return 1
+  page_size=$(vm_stat | grep "page size of" | awk '{print $8}')
+  page_size=${page_size:-4096}
+
+  pages_active=$(vm_stat | awk '/Pages active:/ {print $3}' | tr -d '.')
+  pages_inactive=$(vm_stat | awk '/Pages inactive:/ {print $3}' | tr -d '.')
+  pages_wired=$(vm_stat | awk '/Pages wired down:/ {print $4}' | tr -d '.')
+  pages_free=$(vm_stat | awk '/Pages free:/ {print $3}' | tr -d '.')
+  pages_compressed=$(vm_stat | awk '/Pages occupied by compressor:/ {print $5}' | tr -d '.')
+
+  # Проверяем, что все значения получены корректно
+  for val in $pages_active $pages_inactive $pages_wired $pages_free $pages_compressed $page_size; do
+    if [[ -z "$val" ]]; then
+      echo "WARNING: vm_stat output incomplete, setting mem_usage=0"
+      mem_usage=0
+      return
+    fi
+  done
+
+  # Используемая память = active + wired + compressed (исключаем inactive)
+  pages_used=$((pages_active + pages_wired + pages_compressed))
+  pages_total=$((pages_used + pages_inactive + pages_free))
+
+  bytes_used=$((pages_used * page_size))
+  bytes_total=$((pages_total * page_size))
+
+  if (( bytes_total == 0 )); then
+    mem_val=0
+  else
+    mem_val=$(awk "BEGIN {printf \"%.2f\", ($bytes_used / $bytes_total) * 100}")
+  fi
+
+  mem_val=$(echo "$mem_val" | tr ',' '.')
+
+  mem_usage=$mem_val
+
+  if (( $(echo "$mem_val >= ${THRESHOLDS[MEM_CRIT]}" | bc -l) )); then
+    send_alert "CRITICAL" "Memory usage is at ${mem_val}%"
+  elif (( $(echo "$mem_val >= ${THRESHOLDS[MEM_WARN]}" | bc -l) )); then
+    send_alert "WARNING" "Memory usage is at ${mem_val}%"
   fi
 }
 
 check_disk() {
   echo "Checking disk usage..."
-  local disk_usage
-  disk_usage=$(df / | tail -1 | awk '{print $5}' | tr -d '%')
+  local disk_val disk_num
 
-  push_metric "disk_usage" "$disk_usage" "type=percent"
+  disk_val=$(df / | tail -1 | awk '{print $5}' | tr -d '%')
 
-  if (( disk_usage >= THRESHOLDS[DISK_CRIT] )); then
-    send_alert "CRITICAL" "Disk usage is at ${disk_usage}%"
-    return 2
-  elif (( disk_usage >= THRESHOLDS[DISK_WARN] )); then
-    send_alert "WARNING" "Disk usage is at ${disk_usage}%"
-    return 1
+  if [[ -z "$disk_val" ]]; then
+    disk_usage=0
+    return
+  fi
+
+  disk_num=${disk_val%%.*}
+  disk_usage=$disk_val
+
+  if (( disk_num >= THRESHOLDS[DISK_CRIT] )); then
+    send_alert "CRITICAL" "Disk usage is at ${disk_val}%"
+  elif (( disk_num >= THRESHOLDS[DISK_WARN] )); then
+    send_alert "WARNING" "Disk usage is at ${disk_val}%"
   fi
 }
 
 check_network() {
   echo "Checking network packet loss..."
-  local loss
-  loss=$(ping -c 3 8.8.8.8 | grep 'packet loss' | sed -E 's/.*, ([0-9]+(\.[0-9]+)?)% packet loss.*/\1/')
-  loss=${loss:-100}
+  local loss_val
 
-  push_metric "network_packet_loss" "$loss" "type=percent"
+  loss_val=$(ping -c 3 8.8.8.8 | grep 'packet loss' | sed -E 's/.*, ([0-9]+(\.[0-9]+)?)% packet loss.*/\1/')
 
-  if (( $(echo "$loss > 50" | bc -l) )); then
-    send_alert "CRITICAL" "Network packet loss is at ${loss}%"
-    return 2
-  elif (( $(echo "$loss > 20" | bc -l) )); then
-    send_alert "WARNING" "Network packet loss is at ${loss}%"
-    return 1
+  if [[ -z "$loss_val" ]]; then
+    network_loss=100
+    return
+  fi
+
+  network_loss=$loss_val
+
+  if (( $(echo "$loss_val > 50" | bc -l) )); then
+    send_alert "CRITICAL" "Network packet loss is at ${loss_val}%"
+  elif (( $(echo "$loss_val > 20" | bc -l) )); then
+    send_alert "WARNING" "Network packet loss is at ${loss_val}%"
   fi
 }
 
 check_services() {
   echo "Checking services status..."
-  local service port service_status
+  local service port svc_status
   for service port in ${(kv)SERVICE_PORTS}; do
     if nc -z localhost $port; then
-      service_status=1
+      svc_status=1
     else
-      service_status=0
+      svc_status=0
       send_alert "CRITICAL" "Service $service is DOWN!"
     fi
-    push_metric "service_status" "$service_status" "service=\"$service\",port=\"$port\""
+    service_statuses[$service]=$svc_status
   done
+}
+
+push_all_metrics() {
+  echo "Pushing all metrics to Pushgateway..."
+
+  cpu_usage=${cpu_usage:-0}
+  mem_usage=${mem_usage:-0}
+  disk_usage=${disk_usage:-0}
+  network_loss=${network_loss:-0}
+
+  local payload
+  payload="# TYPE cpu_usage gauge
+cpu_usage{type=\"percent\",instance=\"$INSTANCE_NAME\"} $cpu_usage
+# TYPE memory_usage gauge
+memory_usage{type=\"percent\",instance=\"$INSTANCE_NAME\"} $mem_usage
+# TYPE disk_usage gauge
+disk_usage{type=\"percent\",instance=\"$INSTANCE_NAME\"} $disk_usage
+# TYPE network_packet_loss gauge
+network_packet_loss{type=\"percent\",instance=\"$INSTANCE_NAME\"} $network_loss"
+
+  for service port in ${(kv)SERVICE_PORTS}; do
+    local svc_status=${service_statuses[$service]:-0}
+    payload+=$'\n'
+    payload+="service_status{service=\"$service\",port=\"$port\",instance=\"$INSTANCE_NAME\"} $svc_status"
+  done
+
+  echo "Payload to push:"
+  echo "$payload"
+
+  curl -s -X POST --data-binary @- "$PROMETHEUS_PUSHGATEWAY/metrics/job/infra_monitor/instance/$INSTANCE_NAME" <<< "$payload"
 }
 
 # --- Main Loop ---
@@ -157,13 +215,15 @@ main() {
   trap "echo 'Script terminated'; exit 0" SIGINT SIGTERM
 
   while true; do
-    check_cpu &
-    check_memory &
-    check_disk &
-    check_network &
-    check_services &
-    wait
-    sleep 60
+    check_cpu
+    check_memory
+    check_disk
+    check_network
+    check_services
+
+    push_all_metrics
+
+    sleep 5
   done
 }
 
