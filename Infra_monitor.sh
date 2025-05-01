@@ -33,7 +33,7 @@ set -euo pipefail
 # --- Log File Configuration ---
 
 LOG_FILE="./infra_monitor.log"       # Path to log file
-MAX_LOG_SIZE=$((10 * 1024 * 1024))  # Maximum log file size in bytes (10 MB)
+MAX_LOG_SIZE=$((3 * 1024 * 1024))  # Maximum log file size in bytes (3 MB)
 
 # Redirect all stdout and stderr to a process substitution that:
 # - Prepends each line with a timestamp
