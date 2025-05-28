@@ -1,3 +1,12 @@
+![Shell](https://img.shields.io/badge/Shell-zsh-4E9A06?style=flat&logo=gnu-bash&logoColor=white)
+![macOS](https://img.shields.io/badge/macOS-000000?style=flat&logo=apple&logoColor=white)
+![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?style=flat&logo=prometheus&logoColor=white)
+![Pushgateway](https://img.shields.io/badge/Pushgateway-✓-orange)
+![Telegram](https://img.shields.io/badge/Telegram-26A5E4?style=flat&logo=telegram&logoColor=white)
+![Monitoring](https://img.shields.io/badge/Monitoring-✓-brightgreen)
+![Alerting](https://img.shields.io/badge/Alerting-✓-red)
+![Service Health](https://img.shields.io/badge/Service%20Health-✓-blue)
+
 Script Description
 ------------------
 This script is designed for infrastructure monitoring on macOS systems. It periodically (every 5 seconds) collects key metrics:
