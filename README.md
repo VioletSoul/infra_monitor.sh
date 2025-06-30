@@ -6,6 +6,9 @@
 ![Monitoring](https://img.shields.io/badge/Monitoring-✓-brightgreen)
 ![Alerting](https://img.shields.io/badge/Alerting-✓-red)
 ![Service Health](https://img.shields.io/badge/Service%20Health-✓-blue)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Repo Size](https://img.shields.io/github/repo-size/VioletSoul/infra_monitor.sh)
+![Code Size](https://img.shields.io/github/languages/code-size/VioletSoul/infra_monitor.sh)
 
 Script Description
 ------------------
